@@ -25,4 +25,4 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/usuario/tu-repo"
+"Homepage" = "https://github.com/girelaignacio/ising-covariates"
