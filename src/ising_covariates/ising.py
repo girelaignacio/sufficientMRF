@@ -3,11 +3,11 @@ Sparse Ising Model with Covariates
 ======================================
 This module implements a Sparse Ising Model that incorporates covariates using logistic regression with L1 regularization.
 
-Licencia: MIT
-Autor: Ignacio Girela
+License: MIT
+Author: Ignacio Girela
 Email: ignacio.girela@unc.edu.ar
-Versión: 1.0.0
-Fecha: 2026-10-01
+Version: 1.0.0
+Date: 2026-10-01
 """
 
 __author__ = "Ignacio Girela"
@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 
-class Ising:
+class IsingModel:
     
     def __init__(self, n_lambda: int = 70, cv: int = 10, max_iter: int = 1000, n_jobs = None):
         """
@@ -153,6 +153,31 @@ class Ising:
         if self._coefs is None:
             raise ValueError("The model has not been fitted yet. Call .fit() first.")
 
+    def sdr(self, X: pd.DataFrame) -> np.ndarray:
+        """
+        Compute the sufficient dimension reduction (SDR) of the model.
+        
+        Args:
+            X (pd.DataFrame): DataFrame with binary variables (0/1)
+        
+        Returns:
+            np.ndarray: SDR values
+        """
+        
+        # Check if model is fitted
+        self._check_if_fitted()
+        
+        # Check if covariate effects parameters are not None
+        if 'J_y' not in self._coefs or 'h_y' not in self._coefs:
+            raise ValueError("SDR computation is only valid for models with covariates.")
+        
+        # Compute SDR
+        # First center the data
+        X_centered = X.values - X.values.mean(axis=0)
+        sdr_values = np.einsum('ij,jk-> i', X_centered, self._coefs['h_y']) + \
+                        0.5 * np.einsum('ij,jk,ik-> i', X_centered, self._coefs['J_y'], X_centered)
+        return sdr_values
+    
     def linear_component(self, X: pd.DataFrame, y: pd.DataFrame = None) -> np.ndarray:
         """Compute linear components of the model."""
         
