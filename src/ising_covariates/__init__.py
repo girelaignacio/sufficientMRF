@@ -1,1 +1,0 @@
-from .ising import IsingModel

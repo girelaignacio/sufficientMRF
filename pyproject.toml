@@ -6,12 +6,12 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [project]
-name = "ising-covariates"
+name = "sufficientMRF"
 version = "0.1.0"
 authors = [
   { name="Ignacio Girela", email="ignacio.girela@unc.edu.ar" },
 ]
-description = "Estimate a sparse Ising model that can be specified with covariates."
+description = "Estimate conditional discrete Markov Random Fields that can be specified as a sufficient dimension reduction of a binary variables of interest"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
@@ -28,4 +28,4 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/girelaignacio/ising-covariates"
+"Homepage" = "https://github.com/girelaignacio/sufficientMRF"
