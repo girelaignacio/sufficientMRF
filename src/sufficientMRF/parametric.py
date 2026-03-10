@@ -126,11 +126,6 @@ class IsingModel(BaseMRF):
         
         logger.info("Training completed successfully.")
         return self
-    
-    def _check_if_fitted(self):
-        """Check if the model has been fitted."""
-        if self._coefs is None:
-            raise ValueError("The model has not been fitted yet. Call .fit() first.")
 
     def sdr(self, X: pd.DataFrame) -> np.ndarray:
         """
