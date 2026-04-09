@@ -4,7 +4,12 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegressionCV as LogRegcv
 from multiprocessing import cpu_count
 from tqdm import tqdm
-from .base import BaseMRF, logger
+from .base import BaseMRF
+
+import logging
+# Basic logging configuration
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
 class IsingModel(BaseMRF):
     
@@ -62,14 +67,13 @@ class IsingModel(BaseMRF):
             logger.warning("The model has not been fitted yet. Call .fit() first.")
         return self._coefs
     
-    def fit(self, X: pd.DataFrame, y: pd.DataFrame = None, criterion: str = 'min'):
+    def fit(self, X: pd.DataFrame, y: pd.DataFrame = None):
         """
         Fit Ising model with covariates using logistic regression with L1 penalty
         
         Args:
             X (pd.DataFrame): DataFrame with binary variables (0/1)
             y (pd.DataFrame): DataFrame with covariates (preferably binary)
-            criterion (str, optional): Criterion to make J symmetric ('min' or 'max'). Defaults to 'min'.
             
         Returns:
             Ising: Fitted Ising model with covariates
@@ -116,43 +120,113 @@ class IsingModel(BaseMRF):
                 jy = fit_.coef_[0, n_features + 1:]
                 jy = np.insert(jy, idx, 0)
                 J_y.append(jy)
+                
+        logger.info("Training completed successfully.")
 
         # Store coefficients and make J_0 and J_y symmetric according to criterion
-        self._coefs = {'J_0': self._make_symmetric(np.vstack(J_0), criterion),
+        self._coefs_conserv = {'J_0': self._make_symmetric(np.vstack(J_0), criterion = 'min'),
                         'h_0': np.vstack(h_0)}
-        if y is not None:
-            self._coefs['J_y'] = self._make_symmetric(np.vstack(J_y), criterion)
-            self._coefs['h_y'] = np.vstack(h_y)
+        self._graph_conserv  = self._coefs_conserv['J_0']  != 0
         
-        logger.info("Training completed successfully.")
-        return self
+        self._coefs_nconserv = {'J_0': self._make_symmetric(np.vstack(J_0), criterion = 'max'),
+                        'h_0': np.vstack(h_0)}
+        self._graph_nconserv = self._coefs_nconserv['J_0'] != 0
 
-    def sdr(self, X: pd.DataFrame) -> np.ndarray:
-        """
-        Compute the sufficient dimension reduction (SDR) of the model.
+        if y is not None:
+            self._coefs_conserv['J_y'] = self._make_symmetric(np.vstack(J_y), criterion = 'min')
+            self._coefs_conserv['h_y'] = np.vstack(h_y)
+            self._graph_conserv  = (self._coefs_conserv['J_0']  + self._coefs_conserv['J_y'])  != 0
+
+
+            self._coefs_nconserv['J_y'] = self._make_symmetric(np.vstack(J_y), criterion = 'max')
+            self._coefs_nconserv['h_y'] = np.vstack(h_y)
+            self._graph_nconserv = (self._coefs_nconserv['J_0'] + self._coefs_nconserv['J_y']) != 0            
         
-        Args:
-            X (pd.DataFrame): DataFrame with binary variables (0/1)
+        self._is_fitted = True
         
-        Returns:
-            np.ndarray: SDR values
-        """
-        
-        # Check if model is fitted
+        return self
+    
+    def predict(self, X: pd.DataFrame, level: str = 'global',
+            criterion: str = 'conserv') -> dict:
         self._check_if_fitted()
         
+        if criterion == 'conserv':
+            coefs = self._coefs_conserv
+            graph = self._graph_conserv
+            
+        elif criterion == 'nconserv':
+            coefs = self._coefs_nconserv
+            graph = self._coefs_nconserv
+        else:
+            raise ValueError("criterion must be either 'conserv' or 'nconserv'")
+
         # Check if covariate effects parameters are not None
-        if 'J_y' not in self._coefs or 'h_y' not in self._coefs:
+        if 'J_y' not in coefs or 'h_y' not in coefs:
             raise ValueError("SDR computation is only valid for models with covariates.")
         
-        # Compute SDR
-        # First center the data
-        X_centered = X.values - X.values.mean(axis=0)
-        sdr_values = np.einsum('ij,jk-> i', X_centered, self._coefs['h_y']) + \
-                        0.5 * np.einsum('ij,jk,ik-> i', X_centered, self._coefs['J_y'], X_centered)
-        return sdr_values
+        X_vals = X.values if hasattr(X, 'values') else np.asarray(X)
+        X_centered = X_vals - X_vals.mean(axis=0)
     
-    def linear_component(self, X: pd.DataFrame, y: pd.DataFrame = None) -> np.ndarray:
+        h_y = coefs['h_y'].flatten()   # (p,)
+        J_y = coefs['J_y']             # (p, p)
+        
+        return self._predict_from_params(X_centered, graph, h_y, J_y, level)
+        
+    def _predict_from_params(self, X: np.ndarray, graph: np.ndarray,
+                        h_y: np.ndarray, J_y: np.ndarray,
+                        level: str) -> dict:
+        n, p = X.shape
+        
+        # Ri[s, j] = θj* · xj  +  0.5 · Σ_{k ∈ N(j)} θjk · xj · xk
+        Ri = np.zeros((n, p))
+        for j in range(p):
+            neighbors = np.where(graph[j])[0]
+            Ri[:, j] = h_y[j] * X[:, j]
+            for k in neighbors:
+                Ri[:, j] += 0.5 * J_y[j, k] * X[:, j] * X[:, k]
+        
+        R_global = Ri.sum(axis=1)  # (n,)
+        
+        if level == 'global':
+            return {'R': R_global, 'Ri': Ri}
+        
+        elif level == 'node':
+            return {'Ri': Ri, 'R': R_global}
+        
+        elif level == 'component':
+            components = self._get_connected_components(graph)
+            R_comp = np.stack(
+                [Ri[:, idx].sum(axis=1) for idx in components],
+                axis=1
+            )  # (n, K)
+            return {'R_components': R_comp, 'R': R_global,
+                    'Ri': Ri, 'components': components}
+        
+        else:
+            raise ValueError("level must be 'node', 'component' or 'global'")
+        
+    def _get_connected_components(self, graph: np.ndarray) -> list:
+        
+        p = graph.shape[0]
+        visited = np.zeros(p, dtype=bool)
+        components = []
+        
+        for i in range(p):
+            if not visited[i]:
+                stack, comp = [i], []
+                visited[i] = True
+                while stack:
+                    u = stack.pop()
+                    comp.append(u)
+                    for v in np.flatnonzero(graph[u]):
+                        if not visited[v]:
+                            visited[v] = True
+                            stack.append(v)
+                components.append(np.array(comp, dtype=int))
+        
+        return components   
+    
+    def _linear_component(self, X: pd.DataFrame, y: pd.DataFrame = None) -> np.ndarray:
         """Compute linear components of the model."""
         
         # Check if model is fitted

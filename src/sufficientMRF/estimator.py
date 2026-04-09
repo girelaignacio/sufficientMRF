@@ -19,7 +19,7 @@ class MarkovNetwork:
     
     def sdr(self, X, y=None):
         self.model._check_if_fitted()
-        if self.model.is_parametric:
+        if self.model._is_parametric:
             return self.model.sdr(X)
         else:
             pass
